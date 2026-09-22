@@ -1,0 +1,84 @@
+import { Component, Inject, OnInit, inject } from '@angular/core';
+import { CommonModule } from '@angular/common';
+import { FormBuilder, ReactiveFormsModule, Validators } from '@angular/forms';
+import { HttpClient } from '@angular/common/http';
+import { MAT_DIALOG_DATA, MatDialogModule, MatDialogRef } from '@angular/material/dialog';
+import { MatFormFieldModule } from '@angular/material/form-field';
+import { MatInputModule } from '@angular/material/input';
+import { MatSelectModule } from '@angular/material/select';
+import { MatButtonModule } from '@angular/material/button';
+import { Device } from '../../../models';
+import { deviceListApi } from '../../../api/device.api';
+import { CreateScrapPayload } from '../../../api/scrap.api';
+import { take } from 'rxjs';
+
+@Component({
+  selector: 'app-scrap-form-dialog',
+  standalone: true,
+  imports: [CommonModule, ReactiveFormsModule, MatDialogModule, MatFormFieldModule, MatInputModule, MatSelectModule, MatButtonModule],
+  template: `
+    <h2 mat-dialog-title>发起报废申请</h2>
+    <mat-dialog-content>
+      <form [formGroup]="form" class="form-grid">
+        <mat-form-field appearance="outline" class="full">
+          <mat-label>设备</mat-label>
+          <mat-select formControlName="device_id">
+            <mat-option *ngFor="let d of devices" [value]="d.id">{{ d.name }}（{{ d.asset_code }}）</mat-option>
+          </mat-select>
+        </mat-form-field>
+        <mat-form-field appearance="outline" class="full">
+          <mat-label>报废原因</mat-label>
+          <textarea matInput formControlName="reason" rows="2"></textarea>
+        </mat-form-field>
+        <mat-form-field appearance="outline">
+          <mat-label>残值估计(元)</mat-label>
+          <input matInput type="number" formControlName="estimated_value">
+        </mat-form-field>
+      </form>
+    </mat-dialog-content>
+    <mat-dialog-actions align="end">
+      <button mat-button (click)="close()">取消</button>
+      <button mat-flat-button color="primary" [disabled]="form.invalid" (click)="save()">提交</button>
+    </mat-dialog-actions>
+  `,
+  styles: [`
+    .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 16px; padding-top: 8px; min-width: 500px; }
+    .full { grid-column: 1 / -1; }
+  `],
+})
+export class ScrapFormDialogComponent implements OnInit {
+  private http = inject(HttpClient);
+  devices: Device[] = [];
+
+  form = this.fb.nonNullable.group({
+    device_id: [0 as number, Validators.required],
+    reason: ['', Validators.required],
+    estimated_value: [0],
+  });
+
+  constructor(
+    private dialogRef: MatDialogRef<ScrapFormDialogComponent>,
+    private fb: FormBuilder
+  ) {}
+
+  ngOnInit(): void {
+    deviceListApi(this.http, { page: 1, page_size: 100 }).pipe(take(1)).subscribe({
+      next: (res) => (this.devices = res.list),
+      error: () => (this.devices = []),
+    });
+  }
+
+  save(): void {
+    const raw = this.form.getRawValue();
+    const payload: CreateScrapPayload = {
+      device_id: raw.device_id,
+      reason: raw.reason,
+      estimated_value: raw.estimated_value,
+    };
+    this.dialogRef.close(payload);
+  }
+
+  close(): void {
+    this.dialogRef.close(null);
+  }
+}

@@ -1,0 +1,85 @@
+name: medasset
+
+services:
+  db:
+    image: mysql:8.0
+    container_name: ${COMPOSE_PROJECT_NAME:-medasset}-db
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-medasset_root_pwd}
+      MYSQL_DATABASE: ${DB_NAME:-medasset_db}
+      MYSQL_USER: ${DB_USER:-medasset_user}
+      MYSQL_PASSWORD: ${DB_PASSWORD:-medasset_pwd}
+      TZ: Asia/Shanghai
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+    ports:
+      - "${DB_PORT:-44017}:3306"
+    volumes:
+      - db-data:/var/lib/mysql
+      - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-p${DB_ROOT_PASSWORD:-medasset_root_pwd}"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  redis:
+    image: redis:7-alpine
+    container_name: ${COMPOSE_PROJECT_NAME:-medasset}-redis
+    restart: unless-stopped
+    ports:
+      - "${REDIS_PORT:-46317}:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  backend:
+    build: ./backend
+    container_name: ${COMPOSE_PROJECT_NAME:-medasset}-backend
+    restart: unless-stopped
+    environment:
+      SERVER_PORT: "8080"
+      GIN_MODE: release
+      DB_HOST: db
+      DB_PORT: "3306"
+      DB_USER: ${DB_USER:-medasset_user}
+      DB_PASSWORD: ${DB_PASSWORD:-medasset_pwd}
+      DB_NAME: ${DB_NAME:-medasset_db}
+      JWT_SECRET: ${JWT_SECRET:-change_me_to_a_long_random_string}
+      REDIS_ADDR: redis:6379
+      REDIS_PASSWORD: ""
+      REDIS_DB: "0"
+      RATE_LIMIT_PER_SECOND: "200"
+    ports:
+      - "${BACKEND_PORT:-19936}:8080"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  frontend:
+    build: ./frontend
+    container_name: ${COMPOSE_PROJECT_NAME:-medasset}-frontend
+    restart: unless-stopped
+    ports:
+      - "${FRONTEND_PORT:-18936}:80"
+    depends_on:
+      - backend
+
+volumes:
+  db-data:
+    name: ${COMPOSE_PROJECT_NAME:-medasset}-db-data
+  redis-data:
+    name: ${COMPOSE_PROJECT_NAME:-medasset}-redis-data

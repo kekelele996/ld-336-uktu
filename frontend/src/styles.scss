@@ -1,0 +1,20 @@
+html, body { height: 100%; }
+body { margin: 0; font-family: Roboto, "Helvetica Neue", sans-serif; background: #f5f7fb; }
+
+.app-toolbar { position: sticky; top: 0; z-index: 100; }
+.content-container { padding: 24px; max-width: 1400px; margin: 0 auto; }
+.page-title { margin: 0 0 4px; font-size: 22px; font-weight: 500; }
+.page-subtitle { margin: 0 0 20px; color: rgba(0,0,0,.55); font-size: 13px; }
+.table-wrap { overflow-x: auto; }
+mat-form-field { width: 100%; }
+.filter-bar { display: flex; gap: 16px; flex-wrap: wrap; align-items: center; margin-bottom: 16px; }
+.filter-bar mat-form-field { width: 200px; }
+.filter-bar .spacer { flex: 1 1 auto; }
+.stat-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 16px; margin-bottom: 24px; }
+.stat-card { padding: 16px 20px; }
+.stat-card .stat-value { font-size: 28px; font-weight: 600; margin-top: 8px; }
+.stat-card .stat-label { color: rgba(0,0,0,.55); font-size: 13px; }
+mat-toolbar-row .spacer { flex: 1 1 auto; }
+.active-link { background: rgba(63,81,181,.12); }
+.sidenav { width: 240px; }
+.sidenav .nav-caption { margin-left: 8px; }
