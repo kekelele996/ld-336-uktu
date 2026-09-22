@@ -20,6 +20,12 @@ export interface CompletePayload {
   cost?: number;
   repair_result?: string;
 }
+export interface CompleteResult {
+  record: MaintenanceRecord;
+  device_status: string;
+  device_restored: boolean;
+  notice?: string;
+}
 export interface CancelPayload { reason?: string; }
 
 export function maintenanceListApi(http: HttpClient, page: number, pageSize: number, deviceId?: number, type?: string, status?: string): Observable<PageResult<MaintenanceRecord>> {
@@ -42,8 +48,8 @@ export function maintenanceStartApi(http: HttpClient, id: number, payload: Start
   return http.post<ApiResp<MaintenanceRecord>>(`${API_BASE}/v1/maintenances/${id}/start`, payload).pipe(map(extractData));
 }
 
-export function maintenanceCompleteApi(http: HttpClient, id: number, payload: CompletePayload): Observable<MaintenanceRecord> {
-  return http.post<ApiResp<MaintenanceRecord>>(`${API_BASE}/v1/maintenances/${id}/complete`, payload).pipe(map(extractData));
+export function maintenanceCompleteApi(http: HttpClient, id: number, payload: CompletePayload): Observable<CompleteResult> {
+  return http.post<ApiResp<CompleteResult>>(`${API_BASE}/v1/maintenances/${id}/complete`, payload).pipe(map(extractData));
 }
 
 export function maintenanceCancelApi(http: HttpClient, id: number, payload: CancelPayload): Observable<MaintenanceRecord> {

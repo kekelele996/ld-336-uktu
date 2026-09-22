@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/medasset/medasset/internal/constants"
 	"github.com/medasset/medasset/internal/model"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -34,6 +35,11 @@ func (r *MaintenanceRepository) CreateBatch(tx *gorm.DB, records []model.Mainten
 	return tx.Create(&records).Error
 }
 
+// CreateTx 在指定事务中创建保养/维修工单。
+func (r *MaintenanceRepository) CreateTx(tx *gorm.DB, m *model.MaintenanceRecord) error {
+	return tx.Create(m).Error
+}
+
 // FindByID 按 ID 查询。
 func (r *MaintenanceRepository) FindByID(id uint) (*model.MaintenanceRecord, error) {
 	var m model.MaintenanceRecord
@@ -48,6 +54,16 @@ func (r *MaintenanceRepository) FindByID(id uint) (*model.MaintenanceRecord, err
 func (r *MaintenanceRepository) FindByIDForUpdate(tx *gorm.DB, id uint) (*model.MaintenanceRecord, error) {
 	var m model.MaintenanceRecord
 	err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&m, id).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, ErrNotFound
+	}
+	return &m, err
+}
+
+// FindByIDTx 事务内不加行锁查询（用于先读工单再决定加锁顺序）。
+func (r *MaintenanceRepository) FindByIDTx(tx *gorm.DB, id uint) (*model.MaintenanceRecord, error) {
+	var m model.MaintenanceRecord
+	err := tx.First(&m, id).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, ErrNotFound
 	}
@@ -106,4 +122,45 @@ func (r *MaintenanceRepository) IsRecordNoTaken(v string) (bool, error) {
 		return false, fmt.Errorf("check record_no: %w", err)
 	}
 	return n > 0, nil
+}
+
+// ActiveRepairForUpdateTx 在事务内查询设备当前未闭环的维修工单（待处理/处理中），
+// 并对命中行加行锁，用于"开始维修"互斥校验（串行化并发开始）。
+func (r *MaintenanceRepository) ActiveRepairForUpdateTx(tx *gorm.DB, deviceID, excludeID uint) (*model.MaintenanceRecord, error) {
+	var m model.MaintenanceRecord
+	q := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("device_id = ? AND type = ? AND status IN ?",
+			deviceID, constants.MaintenanceTypeRepair,
+			[]string{constants.MaintenanceStatusPending, constants.MaintenanceStatusInProgress})
+	if excludeID > 0 {
+		q = q.Where("id <> ?", excludeID)
+	}
+	err := q.Order("id ASC").First(&m).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, ErrNotFound
+	}
+	return &m, err
+}
+
+// CountActiveRepairTx 统计设备当前待处理/处理中的维修工单数量（事务内使用）。
+func (r *MaintenanceRepository) CountActiveRepairTx(tx *gorm.DB, deviceID uint) (int64, error) {
+	var n int64
+	err := tx.Model(&model.MaintenanceRecord{}).
+		Where("device_id = ? AND type = ? AND status IN ?",
+			deviceID, constants.MaintenanceTypeRepair,
+			[]string{constants.MaintenanceStatusPending, constants.MaintenanceStatusInProgress}).
+		Count(&n).Error
+	return n, err
+}
+
+// InProgressRepairForDeviceTx 查询设备当前处理中的维修工单（用于调拨/报废联动判断）。
+func (r *MaintenanceRepository) InProgressRepairForDeviceTx(tx *gorm.DB, deviceID uint) (*model.MaintenanceRecord, error) {
+	var m model.MaintenanceRecord
+	err := tx.Where("device_id = ? AND type = ? AND status = ?",
+		deviceID, constants.MaintenanceTypeRepair, constants.MaintenanceStatusInProgress).
+		Order("id DESC").First(&m).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, ErrNotFound
+	}
+	return &m, err
 }

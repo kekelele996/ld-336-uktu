@@ -98,12 +98,12 @@ func (h *MaintenanceHandler) Complete(c *gin.Context) {
 		return
 	}
 	operator := middleware.CurrentUser(c)
-	m, err := h.svc.Complete(p.ID, &req, operator.Username)
+	resp, err := h.svc.Complete(p.ID, &req, operator.Username)
 	if err != nil {
 		c.Error(err)
 		return
 	}
-	util.OK(c, m)
+	util.OK(c, resp)
 }
 
 // Cancel 取消工单。

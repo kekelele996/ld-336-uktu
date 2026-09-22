@@ -4,9 +4,9 @@ import (
 	"log/slog"
 	"testing"
 
+	"github.com/glebarez/sqlite"
 	"github.com/medasset/medasset/internal/model"
 	"github.com/medasset/medasset/internal/repository"
-	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 )
@@ -25,6 +25,12 @@ func newTestServiceEnv(t *testing.T) *testEnv {
 	if err != nil {
 		t.Fatalf("open sqlite failed: %v", err)
 	}
+	// 内存 SQLite 每个连接持有独立库，固定单连接以共享建表结果并避免事务互锁。
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatalf("get sql db failed: %v", err)
+	}
+	sqlDB.SetMaxOpenConns(1)
 	if err := db.AutoMigrate(&model.User{}, &model.Device{}, &model.PurchaseRequest{},
 		&model.MaintenanceRecord{}, &model.CalibrationRecord{}, &model.TransferRequest{},
 		&model.ScrapRequest{}, &model.AuditLog{}); err != nil {

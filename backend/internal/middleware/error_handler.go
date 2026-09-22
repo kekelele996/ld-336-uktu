@@ -43,13 +43,24 @@ func ErrorHandler(log *slog.Logger) gin.HandlerFunc {
 
 func httpStatusOf(code int) int {
 	switch code {
+	case http.StatusBadRequest:
+		return http.StatusBadRequest
+	case http.StatusUnauthorized:
+		return http.StatusUnauthorized
+	case http.StatusForbidden:
+		return http.StatusForbidden
+	case http.StatusNotFound:
+		return http.StatusNotFound
+	case http.StatusConflict:
+		return http.StatusConflict
 	case constants.CodeUnauthorized, constants.CodeInvalidToken, constants.CodeTokenExpired, constants.CodeWrongPassword:
 		return http.StatusUnauthorized
 	case constants.CodeForbidden, constants.CodeUserDisabled:
 		return http.StatusForbidden
 	case constants.CodeNotFound:
 		return http.StatusNotFound
-	case constants.CodeConflict, constants.CodeInvalidStatus, constants.CodeDeviceNotAllowed:
+	case constants.CodeConflict, constants.CodeInvalidStatus, constants.CodeDeviceNotAllowed,
+		constants.CodeRepairBlocked, constants.CodeDeviceInMaintenance, constants.CodeCalibrationUnqualified:
 		return http.StatusConflict
 	case constants.CodeValidation, constants.CodeBadRequest:
 		return http.StatusBadRequest

@@ -17,10 +17,10 @@ import (
 
 // Deps 路由装配依赖。
 type Deps struct {
-	DB   *gorm.DB
-	Cfg  *config.Config
-	Log  *slog.Logger
-	RDB  *redis.Client
+	DB  *gorm.DB
+	Cfg *config.Config
+	Log *slog.Logger
+	RDB *redis.Client
 }
 
 // New 构建 Gin 引擎并注册全部路由。
@@ -54,7 +54,7 @@ func New(deps Deps) *gin.Engine {
 	userSvc := service.NewUserService(userRepo, auditSvc, deps.Cfg.JWTSecret, 24, deps.Log)
 	deviceSvc := service.NewDeviceService(deviceRepo, auditSvc, deps.Log)
 	purchaseSvc := service.NewPurchaseService(purchaseRepo, deviceRepo, auditSvc, deps.Log)
-	maintenanceSvc := service.NewMaintenanceService(maintenanceRepo, deviceRepo, auditSvc, deps.Log)
+	maintenanceSvc := service.NewMaintenanceService(maintenanceRepo, deviceRepo, calibrationRepo, auditSvc, deps.Log)
 	calibrationSvc := service.NewCalibrationService(calibrationRepo, deviceRepo, auditSvc, deps.Log)
 	transferSvc := service.NewTransferService(transferRepo, deviceRepo, auditSvc, deps.Log)
 	scrapSvc := service.NewScrapService(scrapRepo, deviceRepo, auditSvc, deps.Log)

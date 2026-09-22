@@ -1,8 +1,8 @@
 package service
 
 import (
-	"fmt"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"time"
@@ -28,31 +28,31 @@ func NewTransferService(repo *repository.TransferRepository, device *repository.
 }
 
 // Create 发起调拨申请。
+// 设备处于维修期间整次拒绝：不创建调拨申请，设备与原维修工单保持原样。
 func (s *TransferService) Create(req *dto.CreateTransferReq, applicant string) (*model.TransferRequest, error) {
-	d, err := s.device.FindByID(req.DeviceID)
-	if errors.Is(err, repository.ErrNotFound) {
-		return nil, util.NewAppError(http.StatusNotFound, "设备不存在: device_id="+util.Uint64String(req.DeviceID), nil)
-	}
+	var t *model.TransferRequest
+	err := s.repo.DB().Transaction(func(tx *gorm.DB) error {
+		// 行锁读取设备并完成已报废/维修中校验。
+		d, err := lockDeviceAvailable(tx, req.DeviceID, s.log, "transfer")
+		if err != nil {
+			return err
+		}
+		t = &model.TransferRequest{
+			TransferNo:     util.GenSerial("TR"),
+			DeviceID:       d.ID,
+			DeviceName:     d.Name,
+			FromDepartment: d.Department,
+			ToDepartment:   req.ToDepartment,
+			FromPerson:     d.ResponsiblePerson,
+			ToPerson:       req.ToPerson,
+			Reason:         req.Reason,
+			Status:         constants.TransferStatusPending,
+			Applicant:      applicant,
+		}
+		return s.repo.CreateTx(tx, t)
+	})
 	if err != nil {
-		return nil, util.NewAppError(http.StatusInternalServerError, constants.MsgInternalError, err)
-	}
-	if d.Status == constants.DeviceStatusScrapped {
-		return nil, util.NewAppError(http.StatusConflict, constants.MsgDeviceInScrapped, nil)
-	}
-	t := &model.TransferRequest{
-		TransferNo:     util.GenSerial("TR"),
-		DeviceID:       d.ID,
-		DeviceName:     d.Name,
-		FromDepartment: d.Department,
-		ToDepartment:   req.ToDepartment,
-		FromPerson:     d.ResponsiblePerson,
-		ToPerson:       req.ToPerson,
-		Reason:         req.Reason,
-		Status:         constants.TransferStatusPending,
-		Applicant:      applicant,
-	}
-	if err := s.repo.Create(t); err != nil {
-		return nil, util.NewAppError(http.StatusInternalServerError, "创建调拨申请失败: device_name="+d.Name, err)
+		return nil, wrapSvcErr(err)
 	}
 	s.log.Info(fmt.Sprintf(constants.LogTransferCreated, t.TransferNo, t.DeviceID, t.FromDepartment, t.ToDepartment, t.Status))
 	s.audit.Record(0, applicant, "CREATE", "transfer", util.Uint64String(t.ID), "发起调拨: "+t.TransferNo, applicant, "")
@@ -72,7 +72,7 @@ func (s *TransferService) List(page, pageSize int, status string) (*util.PageRes
 func (s *TransferService) Approve(id uint, req *dto.TransferApproveReq, operator string) (*model.TransferRequest, error) {
 	var updated *model.TransferRequest
 	err := s.repo.DB().Transaction(func(tx *gorm.DB) error {
-		t, err := s.repo.FindByID(id)
+		t, err := s.repo.FindByIDForUpdateTx(tx, id)
 		if errors.Is(err, repository.ErrNotFound) {
 			return util.NewAppError(http.StatusNotFound, "调拨申请不存在: id="+util.Uint64String(id), nil)
 		}
@@ -82,16 +82,27 @@ func (s *TransferService) Approve(id uint, req *dto.TransferApproveReq, operator
 		if t.Status != constants.TransferStatusPending {
 			return util.NewAppError(http.StatusConflict, constants.MsgInvalidStatus, nil)
 		}
+		// 先锁设备行（与维修开始/完成保持一致的加锁顺序，避免死锁）；
+		// 设备进入维修期间待审批调拨不得通过（申请与设备保持原样）。
+		d, err := lockDeviceAvailable(tx, t.DeviceID, s.log, "transfer")
+		if err != nil {
+			return err
+		}
+		now := time.Now()
 		t.Status = constants.TransferStatusApproved
 		t.Approver = operator
 		t.ApproveComment = req.Comment
-		now := time.Now()
 		t.ApproveAt = &now
-		if err := s.repo.UpdateTx(tx, t); err != nil {
+		// CAS 更新：并发审批/状态变更时只有一个事务能推进申请。
+		ok, err := s.repo.UpdateIfPendingTx(tx, t)
+		if err != nil {
 			return err
 		}
+		if !ok {
+			return util.NewAppError(http.StatusConflict, constants.MsgInvalidStatus, nil)
+		}
 		// 更新设备所属科室与责任人。
-		if err := tx.Model(&model.Device{}).Where("id = ?", t.DeviceID).
+		if err := tx.Model(&model.Device{}).Where("id = ?", d.ID).
 			Updates(map[string]any{"department": t.ToDepartment, "responsible_person": t.ToPerson}).Error; err != nil {
 			return err
 		}

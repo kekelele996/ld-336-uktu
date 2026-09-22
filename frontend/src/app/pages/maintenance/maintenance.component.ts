@@ -155,7 +155,7 @@ export class MaintenanceComponent implements OnInit, OnDestroy {
       if (!payload) return;
       maintenanceCreateApi(this.http, payload).subscribe({
         next: () => { this.snackBar.open('工单创建成功', '关闭', { duration: 2000 }); this.load(); },
-        error: (err) => this.snackBar.open(parseHttpError(err), '关闭', { duration: 3000 }),
+        error: (err) => { this.snackBar.open(parseHttpError(err), '关闭', { duration: 4000 }); this.load(); },
       });
     });
   }
@@ -166,7 +166,8 @@ export class MaintenanceComponent implements OnInit, OnDestroy {
       if (!payload) return;
       maintenanceStartApi(this.http, m.id, payload).subscribe({
         next: () => { this.snackBar.open('工单已开始执行', '关闭', { duration: 2000 }); this.load(); },
-        error: (err) => this.snackBar.open(parseHttpError(err), '关闭', { duration: 3000 }),
+        // 重复开始/并发提交/已有进行中维修被拒绝时，刷新列表与服务端状态保持一致并展示阻塞原因。
+        error: (err) => { this.snackBar.open(parseHttpError(err), '关闭', { duration: 4000 }); this.load(); },
       });
     });
   }
@@ -176,8 +177,16 @@ export class MaintenanceComponent implements OnInit, OnDestroy {
     ref.afterClosed().subscribe((payload) => {
       if (!payload) return;
       maintenanceCompleteApi(this.http, m.id, payload).subscribe({
-        next: () => { this.snackBar.open('工单已完成', '关闭', { duration: 2000 }); this.load(); },
-        error: (err) => this.snackBar.open(parseHttpError(err), '关闭', { duration: 3000 }),
+        next: (res) => {
+          this.snackBar.open(
+            res.notice || (res.device_restored ? '工单已完成，设备已恢复使用中' : '工单已完成'),
+            '关闭',
+            { duration: res.notice ? 5000 : 2000 },
+          );
+          this.load();
+        },
+        // 重复完成或并发冲突时刷新页面，保证与服务端最终状态一致。
+        error: (err) => { this.snackBar.open(parseHttpError(err), '关闭', { duration: 4000 }); this.load(); },
       });
     });
   }

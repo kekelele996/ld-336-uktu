@@ -1,6 +1,10 @@
 package dto
 
-import "time"
+import (
+	"time"
+
+	"github.com/medasset/medasset/internal/model"
+)
 
 // CreateMaintenanceReq 创建保养/维修工单请求。
 type CreateMaintenanceReq struct {
@@ -29,4 +33,13 @@ type CompleteMaintenanceReq struct {
 // CancelMaintenanceReq 取消工单请求。
 type CancelMaintenanceReq struct {
 	Reason string `json:"reason" binding:"omitempty,max=512"`
+}
+
+// CompleteMaintenanceResp 完成工单响应。
+// DeviceRestored=false 时表示设备未恢复使用（如最新计量不合格保持禁用），Notice 为页面提示。
+type CompleteMaintenanceResp struct {
+	Record         *model.MaintenanceRecord `json:"record"`
+	DeviceStatus   string                   `json:"device_status"`
+	DeviceRestored bool                     `json:"device_restored"`
+	Notice         string                   `json:"notice,omitempty"`
 }

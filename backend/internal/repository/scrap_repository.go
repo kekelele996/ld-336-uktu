@@ -4,8 +4,10 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/medasset/medasset/internal/constants"
 	"github.com/medasset/medasset/internal/model"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // ScrapRepository 报废申请仓储。
@@ -25,10 +27,25 @@ func (r *ScrapRepository) Create(s *model.ScrapRequest) error {
 	return r.db.Create(s).Error
 }
 
+// CreateTx 在指定事务中创建报废申请。
+func (r *ScrapRepository) CreateTx(tx *gorm.DB, s *model.ScrapRequest) error {
+	return tx.Create(s).Error
+}
+
 // FindByID 按 ID 查询。
 func (r *ScrapRepository) FindByID(id uint) (*model.ScrapRequest, error) {
 	var s model.ScrapRequest
 	err := r.db.First(&s, id).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, ErrNotFound
+	}
+	return &s, err
+}
+
+// FindByIDForUpdateTx 事务内加锁查询报废申请。
+func (r *ScrapRepository) FindByIDForUpdateTx(tx *gorm.DB, id uint) (*model.ScrapRequest, error) {
+	var s model.ScrapRequest
+	err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&s, id).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, ErrNotFound
 	}
@@ -58,6 +75,22 @@ func (r *ScrapRepository) Update(s *model.ScrapRequest) error {
 // UpdateTx 在指定事务中更新更新报废申请。
 func (r *ScrapRepository) UpdateTx(tx *gorm.DB, s *model.ScrapRequest) error {
 	return tx.Save(s).Error
+}
+
+// UpdateIfPendingTx 仅当申请仍为待审批时在事务内更新（CAS，防止并发重复审批）。
+func (r *ScrapRepository) UpdateIfPendingTx(tx *gorm.DB, s *model.ScrapRequest) (bool, error) {
+	res := tx.Model(&model.ScrapRequest{}).
+		Where("id = ? AND status = ?", s.ID, constants.ScrapStatusPending).
+		Updates(map[string]any{
+			"status":          s.Status,
+			"approver":        s.Approver,
+			"approve_comment": s.ApproveComment,
+			"approve_at":      s.ApproveAt,
+		})
+	if res.Error != nil {
+		return false, res.Error
+	}
+	return res.RowsAffected == 1, nil
 }
 
 // IsScrapNoTaken 判断ScrapNo是否已存在。

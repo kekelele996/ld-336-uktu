@@ -6,6 +6,7 @@ import (
 
 	"github.com/medasset/medasset/internal/model"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // CalibrationRepository 计量台账仓储。
@@ -85,4 +86,25 @@ func (r *CalibrationRepository) IsInstrumentNoTaken(v string) (bool, error) {
 		return false, fmt.Errorf("check instrument_no: %w", err)
 	}
 	return n > 0, nil
+}
+
+// FindByIDForUpdateTx 事务内加锁查询计量记录。
+func (r *CalibrationRepository) FindByIDForUpdateTx(tx *gorm.DB, id uint) (*model.CalibrationRecord, error) {
+	var c model.CalibrationRecord
+	err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&c, id).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, ErrNotFound
+	}
+	return &c, err
+}
+
+// LatestByDeviceTx 查询设备最新一条计量台账（维修完成时判断是否恢复使用，事务内使用）。
+// 未纳入计量（无计量记录）返回 ErrNotFound。
+func (r *CalibrationRepository) LatestByDeviceTx(tx *gorm.DB, deviceID uint) (*model.CalibrationRecord, error) {
+	var c model.CalibrationRecord
+	err := tx.Where("device_id = ?", deviceID).Order("id DESC").First(&c).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, ErrNotFound
+	}
+	return &c, err
 }
