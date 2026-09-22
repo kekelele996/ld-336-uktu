@@ -49,7 +49,7 @@ func httpStatusOf(code int) int {
 		return http.StatusForbidden
 	case constants.CodeNotFound:
 		return http.StatusNotFound
-	case constants.CodeConflict, constants.CodeInvalidStatus, constants.CodeDeviceNotAllowed:
+	case constants.CodeConflict, constants.CodeInvalidStatus, constants.CodeDeviceNotAllowed, constants.CodeRepairBlocked:
 		return http.StatusConflict
 	case constants.CodeValidation, constants.CodeBadRequest:
 		return http.StatusBadRequest

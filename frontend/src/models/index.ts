@@ -103,6 +103,12 @@ export interface MaintenanceRecord {
   created_by: string;
 }
 
+// 开始/完成维修响应：附带设备联动状态与阻塞/计量提示。
+export interface MaintenanceActionResult extends MaintenanceRecord {
+  device_status: string;
+  notice: string;
+}
+
 export interface CalibrationRecord {
   id: number;
   instrument_no: string;

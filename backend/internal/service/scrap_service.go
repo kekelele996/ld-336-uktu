@@ -1,8 +1,8 @@
 package service
 
 import (
-	"fmt"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"time"
@@ -28,28 +28,37 @@ func NewScrapService(repo *repository.ScrapRepository, device *repository.Device
 }
 
 // Create 发起报废申请。
+// 设备维修期间整次拒绝：校验与写入在同一事务内基于设备行锁完成，
+// 命中维修中状态时回滚，原报废申请（不产生记录）与设备保持原样。
 func (s *ScrapService) Create(req *dto.CreateScrapReq, applicant string) (*model.ScrapRequest, error) {
-	d, err := s.device.FindByID(req.DeviceID)
-	if errors.Is(err, repository.ErrNotFound) {
-		return nil, util.NewAppError(http.StatusNotFound, "设备不存在: device_id="+util.Uint64String(req.DeviceID), nil)
-	}
+	sr := &model.ScrapRequest{}
+	err := s.repo.DB().Transaction(func(tx *gorm.DB) error {
+		d, err := s.device.FindByIDForUpdate(tx, req.DeviceID)
+		if errors.Is(err, repository.ErrNotFound) {
+			return util.NewAppError(http.StatusNotFound, "设备不存在: device_id="+util.Uint64String(req.DeviceID), nil)
+		}
+		if err != nil {
+			return util.NewAppError(http.StatusInternalServerError, constants.MsgInternalError, err)
+		}
+		if d.Status == constants.DeviceStatusScrapped {
+			return util.NewAppError(http.StatusConflict, constants.MsgDeviceInScrapped, nil)
+		}
+		if d.Status == constants.DeviceStatusUnderMaintenance {
+			return util.NewAppError(http.StatusConflict, constants.MsgDeviceUnderMaintenance, nil)
+		}
+		*sr = model.ScrapRequest{
+			ScrapNo:        util.GenSerial("SC"),
+			DeviceID:       d.ID,
+			DeviceName:     d.Name,
+			Reason:         req.Reason,
+			EstimatedValue: req.EstimatedValue,
+			Status:         constants.ScrapStatusPending,
+			Applicant:      applicant,
+		}
+		return s.repo.CreateTx(tx, sr)
+	})
 	if err != nil {
-		return nil, util.NewAppError(http.StatusInternalServerError, constants.MsgInternalError, err)
-	}
-	if d.Status == constants.DeviceStatusScrapped {
-		return nil, util.NewAppError(http.StatusConflict, constants.MsgDeviceInScrapped, nil)
-	}
-	sr := &model.ScrapRequest{
-		ScrapNo:        util.GenSerial("SC"),
-		DeviceID:       d.ID,
-		DeviceName:     d.Name,
-		Reason:         req.Reason,
-		EstimatedValue: req.EstimatedValue,
-		Status:         constants.ScrapStatusPending,
-		Applicant:      applicant,
-	}
-	if err := s.repo.Create(sr); err != nil {
-		return nil, util.NewAppError(http.StatusInternalServerError, "创建报废申请失败: device_name="+d.Name, err)
+		return nil, wrapSvcErr(err)
 	}
 	s.log.Info(fmt.Sprintf(constants.LogScrapCreated, sr.ScrapNo, sr.DeviceID, sr.Status))
 	s.audit.Record(0, applicant, "CREATE", "scrap", util.Uint64String(sr.ID), "发起报废: "+sr.ScrapNo, applicant, "")
@@ -66,10 +75,11 @@ func (s *ScrapService) List(page, pageSize int, status string) (*util.PageResult
 }
 
 // Approve 审批通过：设备状态变更为已报废并归档。
+// 设备进入维修期间（申请之后才开始维修）同样拒绝：申请与设备均保持原样。
 func (s *ScrapService) Approve(id uint, req *dto.ScrapApproveReq, operator string) (*model.ScrapRequest, error) {
 	var updated *model.ScrapRequest
 	err := s.repo.DB().Transaction(func(tx *gorm.DB) error {
-		sr, err := s.repo.FindByID(id)
+		sr, err := s.repo.FindByIDForUpdate(tx, id)
 		if errors.Is(err, repository.ErrNotFound) {
 			return util.NewAppError(http.StatusNotFound, "报废申请不存在: id="+util.Uint64String(id), nil)
 		}
@@ -78,6 +88,13 @@ func (s *ScrapService) Approve(id uint, req *dto.ScrapApproveReq, operator strin
 		}
 		if sr.Status != constants.ScrapStatusPending {
 			return util.NewAppError(http.StatusConflict, constants.MsgInvalidStatus, nil)
+		}
+		d, err := s.device.FindByIDForUpdate(tx, sr.DeviceID)
+		if err != nil {
+			return err
+		}
+		if d.Status == constants.DeviceStatusUnderMaintenance {
+			return util.NewAppError(http.StatusConflict, constants.MsgDeviceUnderMaintenance, nil)
 		}
 		sr.Status = constants.ScrapStatusApproved
 		sr.Approver = operator

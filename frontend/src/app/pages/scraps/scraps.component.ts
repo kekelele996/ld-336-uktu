@@ -114,7 +114,8 @@ export class ScrapsComponent implements OnInit, OnDestroy {
       if (!payload) return;
       scrapCreateApi(this.http, payload).subscribe({
         next: () => { this.snackBar.open('报废申请已提交', '关闭', { duration: 2000 }); this.load(); },
-        error: (err) => this.snackBar.open(parseHttpError(err), '关闭', { duration: 3000 }),
+        // 设备维修中申请被整次拒绝，展示阻塞原因并刷新保持一致。
+        error: (err) => { this.snackBar.open(parseHttpError(err), '关闭', { duration: 5000 }); this.load(); },
       });
     });
   }
@@ -127,7 +128,8 @@ export class ScrapsComponent implements OnInit, OnDestroy {
       if (!ok) return;
       scrapApproveApi(this.http, s.id).subscribe({
         next: () => { this.snackBar.open('报废已批准，设备已归档', '关闭', { duration: 2000 }); this.load(); },
-        error: (err) => this.snackBar.open(parseHttpError(err), '关闭', { duration: 3000 }),
+        // 维修期间审批被拒绝，原申请与设备保持原样；展示阻塞原因并刷新。
+        error: (err) => { this.snackBar.open(parseHttpError(err), '关闭', { duration: 5000 }); this.load(); },
       });
     });
   }
@@ -140,7 +142,7 @@ export class ScrapsComponent implements OnInit, OnDestroy {
       if (!ok) return;
       scrapRejectApi(this.http, s.id).subscribe({
         next: () => { this.snackBar.open('报废已驳回', '关闭', { duration: 2000 }); this.load(); },
-        error: (err) => this.snackBar.open(parseHttpError(err), '关闭', { duration: 3000 }),
+        error: (err) => { this.snackBar.open(parseHttpError(err), '关闭', { duration: 5000 }); this.load(); },
       });
     });
   }

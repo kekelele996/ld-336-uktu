@@ -27,12 +27,36 @@ func (r *CalibrationRepository) Create(c *model.CalibrationRecord) error {
 
 // FindByID 按 ID 查询。
 func (r *CalibrationRepository) FindByID(id uint) (*model.CalibrationRecord, error) {
+	return r.findByID(r.db, id)
+}
+
+// FindByIDTx 在指定事务中按 ID 查询（事务内一致读）。
+func (r *CalibrationRepository) FindByIDTx(tx *gorm.DB, id uint) (*model.CalibrationRecord, error) {
+	return r.findByID(tx, id)
+}
+
+func (r *CalibrationRepository) findByID(q *gorm.DB, id uint) (*model.CalibrationRecord, error) {
 	var c model.CalibrationRecord
-	err := r.db.First(&c, id).Error
+	err := q.First(&c, id).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, ErrNotFound
 	}
 	return &c, err
+}
+
+// LatestByDeviceTx 查询设备最新一条计量台账记录（事务内，按最近登记时间/ID 倒序）。
+// 设备从未纳入计量（无记录）时返回 nil，调用方据此允许恢复使用。
+func (r *CalibrationRepository) LatestByDeviceTx(tx *gorm.DB, deviceID uint) (*model.CalibrationRecord, error) {
+	var c model.CalibrationRecord
+	err := tx.Where("device_id = ?", deviceID).
+		Order("last_calibration_date DESC, id DESC").First(&c).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &c, nil
 }
 
 // List 分页查询计量记录。

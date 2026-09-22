@@ -1,6 +1,6 @@
 import { HttpClient, HttpParams } from '@angular/common/http';
 import { Observable, map } from 'rxjs';
-import { ApiResp, MaintenanceRecord, PageResult } from '../models';
+import { ApiResp, MaintenanceActionResult, MaintenanceRecord, PageResult } from '../models';
 import { API_BASE, extractData } from '../utils/request';
 
 export interface CreateMaintenancePayload {
@@ -38,12 +38,12 @@ export function maintenancePlanApi(http: HttpClient): Observable<{ created: numb
   return http.post<ApiResp<{ created: number }>>(`${API_BASE}/v1/maintenances/plan/generate`, {}).pipe(map(extractData));
 }
 
-export function maintenanceStartApi(http: HttpClient, id: number, payload: StartPayload): Observable<MaintenanceRecord> {
-  return http.post<ApiResp<MaintenanceRecord>>(`${API_BASE}/v1/maintenances/${id}/start`, payload).pipe(map(extractData));
+export function maintenanceStartApi(http: HttpClient, id: number, payload: StartPayload): Observable<MaintenanceActionResult> {
+  return http.post<ApiResp<MaintenanceActionResult>>(`${API_BASE}/v1/maintenances/${id}/start`, payload).pipe(map(extractData));
 }
 
-export function maintenanceCompleteApi(http: HttpClient, id: number, payload: CompletePayload): Observable<MaintenanceRecord> {
-  return http.post<ApiResp<MaintenanceRecord>>(`${API_BASE}/v1/maintenances/${id}/complete`, payload).pipe(map(extractData));
+export function maintenanceCompleteApi(http: HttpClient, id: number, payload: CompletePayload): Observable<MaintenanceActionResult> {
+  return http.post<ApiResp<MaintenanceActionResult>>(`${API_BASE}/v1/maintenances/${id}/complete`, payload).pipe(map(extractData));
 }
 
 export function maintenanceCancelApi(http: HttpClient, id: number, payload: CancelPayload): Observable<MaintenanceRecord> {

@@ -6,6 +6,7 @@ import (
 
 	"github.com/medasset/medasset/internal/model"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // TransferRepository 调拨申请仓储。
@@ -23,6 +24,21 @@ func (r *TransferRepository) DB() *gorm.DB { return r.db }
 // Create 创建调拨申请。
 func (r *TransferRepository) Create(t *model.TransferRequest) error {
 	return r.db.Create(t).Error
+}
+
+// CreateTx 在指定事务中创建调拨申请。
+func (r *TransferRepository) CreateTx(tx *gorm.DB, t *model.TransferRequest) error {
+	return tx.Create(t).Error
+}
+
+// FindByIDForUpdate 加锁查询调拨申请（审批并发安全）。
+func (r *TransferRepository) FindByIDForUpdate(tx *gorm.DB, id uint) (*model.TransferRequest, error) {
+	var t model.TransferRequest
+	err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&t, id).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, ErrNotFound
+	}
+	return &t, err
 }
 
 // FindByID 按 ID 查询。

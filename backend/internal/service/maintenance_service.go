@@ -1,8 +1,8 @@
 package service
 
 import (
-	"fmt"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"time"
@@ -18,14 +18,15 @@ import (
 
 // MaintenanceService 维护保养与故障维修服务。
 type MaintenanceService struct {
-	repo   *repository.MaintenanceRepository
-	device *repository.DeviceRepository
-	audit  *AuditService
-	log    *slog.Logger
+	repo        *repository.MaintenanceRepository
+	device      *repository.DeviceRepository
+	calibration *repository.CalibrationRepository
+	audit       *AuditService
+	log         *slog.Logger
 }
 
-func NewMaintenanceService(repo *repository.MaintenanceRepository, device *repository.DeviceRepository, audit *AuditService, log *slog.Logger) *MaintenanceService {
-	return &MaintenanceService{repo: repo, device: device, audit: audit, log: log}
+func NewMaintenanceService(repo *repository.MaintenanceRepository, device *repository.DeviceRepository, calibration *repository.CalibrationRepository, audit *AuditService, log *slog.Logger) *MaintenanceService {
+	return &MaintenanceService{repo: repo, device: device, calibration: calibration, audit: audit, log: log}
 }
 
 // Create 创建保养/维修工单（报修或计划执行）。
@@ -122,49 +123,91 @@ func (s *MaintenanceService) List(page, pageSize int, deviceID uint, mType, stat
 }
 
 // Start 开始执行工单。
-func (s *MaintenanceService) Start(id uint, req *dto.StartMaintenanceReq, operator string) (*model.MaintenanceRecord, error) {
-	var updated *model.MaintenanceRecord
+// 维修工单开始前做设备级互斥：同一设备存在其他待处理/处理中的维修工单时整次拒绝
+// （含本工单之外的待处理重复报修单），设备行锁串行化并发提交，重复/并发开始只生效一次。
+func (s *MaintenanceService) Start(id uint, req *dto.StartMaintenanceReq, operator string) (*dto.MaintenanceActionResp, error) {
+	var resp *dto.MaintenanceActionResp
 	err := s.repo.DB().Transaction(func(tx *gorm.DB) error {
-		m, err := s.repo.FindByIDForUpdate(tx, id)
+		// 先普通读取工单定位设备，随后锁定设备行再锁工单行：
+		// 同一设备的并发开始在设备锁处串行，避免“工单行→设备行”反向加锁导致死锁。
+		pre, err := s.repo.FindByIDTx(tx, id)
 		if errors.Is(err, repository.ErrNotFound) {
 			return util.NewAppError(http.StatusNotFound, "工单不存在: id="+util.Uint64String(id), nil)
 		}
 		if err != nil {
 			return err
 		}
+		d, err := s.device.FindByIDForUpdate(tx, pre.DeviceID)
+		if err != nil {
+			return err
+		}
+		m, err := s.repo.FindByIDForUpdate(tx, id)
+		if err != nil {
+			return err
+		}
 		if m.Status != constants.MaintenanceStatusPending {
+			// 重复开始：仅给出阻塞原因，不改变任何数据。
+			if m.Type == constants.MaintenanceTypeRepair && m.Status == constants.MaintenanceStatusInProgress {
+				return util.NewAppError(http.StatusConflict, constants.MsgRepairBlockedPrefix+constants.MsgRepairAlreadyRunning, nil)
+			}
 			return util.NewAppError(http.StatusConflict, constants.MsgInvalidStatus, nil)
+		}
+		if m.Type == constants.MaintenanceTypeRepair {
+			blocker, err := s.repo.FindRepairBlockerForUpdate(tx, m.DeviceID, m.ID)
+			if err != nil {
+				return err
+			}
+			if blocker != nil {
+				reason := fmt.Sprintf("%s（阻塞工单: %s，状态: %s）",
+					constants.MsgRepairBlockedByOther, blocker.RecordNo, util.MaintenanceStatusText(blocker.Status))
+				s.log.Warn(fmt.Sprintf(constants.LogMaintenanceBlocked, m.RecordNo, m.DeviceID, blocker.RecordNo, blocker.Status, operator))
+				return util.NewAppError(http.StatusConflict, constants.MsgRepairBlockedPrefix+reason, nil)
+			}
 		}
 		m.Status = constants.MaintenanceStatusInProgress
 		m.Engineer = req.Engineer
 		if err := s.repo.UpdateTx(tx, m); err != nil {
 			return err
 		}
-		// 维修类工单开始时设备进入维修中状态。
+		notice := ""
+		// 维修类工单开始时设备进入维修中状态；维修期间调拨/报废申请将被拒绝。
 		if m.Type == constants.MaintenanceTypeRepair {
 			if err := s.device.UpdateStatusTx(tx, m.DeviceID, constants.DeviceStatusUnderMaintenance); err != nil {
 				return err
 			}
+			d.Status = constants.DeviceStatusUnderMaintenance
+			notice = constants.MsgRepairStartNotice
 		}
-		updated = m
+		resp = &dto.MaintenanceActionResp{MaintenanceRecord: *m, DeviceStatus: d.Status, Notice: notice}
 		return nil
 	})
 	if err != nil {
 		return nil, wrapSvcErr(err)
 	}
-	s.log.Info(fmt.Sprintf(constants.LogMaintenanceStarted, updated.RecordNo, updated.Engineer, updated.Status))
-	s.audit.Record(0, operator, "START", "maintenance", util.Uint64String(updated.ID), "开始执行: "+updated.RecordNo, operator, "")
-	return updated, nil
+	s.log.Info(fmt.Sprintf(constants.LogMaintenanceStarted, resp.RecordNo, resp.Engineer, resp.Status))
+	s.audit.Record(0, operator, "START", "maintenance", util.Uint64String(resp.ID), "开始执行: "+resp.RecordNo, operator, "")
+	return resp, nil
 }
 
 // Complete 完成工单（更新工时/成本/配件，恢复设备状态）。
-func (s *MaintenanceService) Complete(id uint, req *dto.CompleteMaintenanceReq, operator string) (*model.MaintenanceRecord, error) {
-	var updated *model.MaintenanceRecord
+// 维修完成时按最新计量结果联动设备可用性：最新结果不合格则保持禁用并提示未通过计量；
+// 仅计量合格或设备从未纳入计量时恢复使用中。
+func (s *MaintenanceService) Complete(id uint, req *dto.CompleteMaintenanceReq, operator string) (*dto.MaintenanceActionResp, error) {
+	var resp *dto.MaintenanceActionResp
 	err := s.repo.DB().Transaction(func(tx *gorm.DB) error {
-		m, err := s.repo.FindByIDForUpdate(tx, id)
+		// 与 Start 保持相同加锁顺序（设备行先于工单行），杜绝跨事务死锁。
+		pre, err := s.repo.FindByIDTx(tx, id)
 		if errors.Is(err, repository.ErrNotFound) {
 			return util.NewAppError(http.StatusNotFound, "工单不存在: id="+util.Uint64String(id), nil)
 		}
+		if err != nil {
+			return err
+		}
+		d, err := s.device.FindByIDForUpdate(tx, pre.DeviceID)
+		if err != nil {
+			return err
+		}
+		m, err := s.repo.FindByIDForUpdate(tx, id)
 		if err != nil {
 			return err
 		}
@@ -182,24 +225,45 @@ func (s *MaintenanceService) Complete(id uint, req *dto.CompleteMaintenanceReq, 
 		if err := s.repo.UpdateTx(tx, m); err != nil {
 			return err
 		}
-		// 维修完成后设备恢复使用中。
+		notice := ""
+		latestResult := ""
 		if m.Type == constants.MaintenanceTypeRepair {
-			if err := s.device.UpdateStatusTx(tx, m.DeviceID, constants.DeviceStatusInUse); err != nil {
+			targetStatus := constants.DeviceStatusInUse
+			notice = constants.MsgRepairRestoredInUse
+			latest, err := s.calibration.LatestByDeviceTx(tx, m.DeviceID)
+			if err != nil {
 				return err
 			}
+			if latest != nil {
+				latestResult = latest.Result
+				if latest.Result == constants.CalibrationResultUnqualified {
+					// 最新计量结果不合格：设备保持禁用，提示未通过计量。
+					targetStatus = constants.DeviceStatusDisabled
+					notice = constants.MsgRepairCalibrationUnqualified
+				}
+			}
+			if err := s.device.UpdateStatusTx(tx, m.DeviceID, targetStatus); err != nil {
+				return err
+			}
+			d.Status = targetStatus
+			s.log.Info(fmt.Sprintf(constants.LogMaintenanceCalibration, m.RecordNo, m.DeviceID, latestResult, targetStatus))
 		}
 		if err := tx.Model(&model.Device{}).Where("id = ?", m.DeviceID).Update("last_maintenance_at", now).Error; err != nil {
 			return err
 		}
-		updated = m
+		resp = &dto.MaintenanceActionResp{MaintenanceRecord: *m, DeviceStatus: d.Status, Notice: notice}
 		return nil
 	})
 	if err != nil {
 		return nil, wrapSvcErr(err)
 	}
-	s.log.Info(fmt.Sprintf(constants.LogMaintenanceCompleted, updated.RecordNo, updated.DeviceID, updated.Cost, updated.Status))
-	s.audit.Record(0, operator, "COMPLETE", "maintenance", util.Uint64String(updated.ID), "完成工单: "+updated.RecordNo, operator, "")
-	return updated, nil
+	s.log.Info(fmt.Sprintf(constants.LogMaintenanceCompleted, resp.RecordNo, resp.DeviceID, resp.Cost, resp.Status))
+	auditDetail := "完成工单: " + resp.RecordNo
+	if resp.Notice == constants.MsgRepairCalibrationUnqualified {
+		auditDetail += "；最新计量不合格，设备保持禁用"
+	}
+	s.audit.Record(0, operator, "COMPLETE", "maintenance", util.Uint64String(resp.ID), auditDetail, operator, "")
+	return resp, nil
 }
 
 // Cancel 取消工单。

@@ -1,6 +1,10 @@
 package dto
 
-import "time"
+import (
+	"time"
+
+	"github.com/medasset/medasset/internal/model"
+)
 
 // CreateMaintenanceReq 创建保养/维修工单请求。
 type CreateMaintenanceReq struct {
@@ -29,4 +33,12 @@ type CompleteMaintenanceReq struct {
 // CancelMaintenanceReq 取消工单请求。
 type CancelMaintenanceReq struct {
 	Reason string `json:"reason" binding:"omitempty,max=512"`
+}
+
+// MaintenanceActionResp 开始/完成工单响应：在工单基础上回传设备联动状态与阻塞/计量提示，
+// 前端据此在页面展示阻塞原因或未通过计量提示，刷新后与设备状态保持一致。
+type MaintenanceActionResp struct {
+	model.MaintenanceRecord
+	DeviceStatus string `json:"device_status"`
+	Notice       string `json:"notice"`
 }

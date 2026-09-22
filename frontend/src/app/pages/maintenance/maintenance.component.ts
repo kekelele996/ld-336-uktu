@@ -18,7 +18,7 @@ import { EmptyStateComponent } from '../../components/empty-state/empty-state.co
 import { ConfirmDialogComponent, ConfirmDialogData } from '../../components/confirm-dialog/confirm-dialog.component';
 import { MaintenanceFormDialogComponent, MaintenanceFormData } from './maintenance-form-dialog.component';
 import { MaintenanceStore } from '../../../stores/maintenance.store';
-import { MaintenanceRecord } from '../../../models';
+import { MaintenanceActionResult, MaintenanceRecord } from '../../../models';
 import {
   maintenanceCreateApi, maintenancePlanApi, maintenanceStartApi, maintenanceCompleteApi, maintenanceCancelApi,
 } from '../../../api/maintenance.api';
@@ -86,7 +86,10 @@ import { Subject, takeUntil } from 'rxjs';
           </ng-container>
           <ng-container matColumnDef="status">
             <th mat-header-cell *matHeaderCellDef>状态</th>
-            <td mat-cell *matCellDef="let m"><app-status-badge [status]="m.status" [labelMap]="statusText"></app-status-badge></td>
+            <td mat-cell *matCellDef="let m">
+              <app-status-badge [status]="m.status" [labelMap]="statusText"></app-status-badge>
+              <div class="block-reason" *ngIf="repairBlockReason(m)">{{ repairBlockReason(m) }}</div>
+            </td>
           </ng-container>
           <ng-container matColumnDef="actions">
             <th mat-header-cell *matHeaderCellDef>操作</th>
@@ -109,6 +112,7 @@ import { Subject, takeUntil } from 'rxjs';
     .full-table { width: 100%; }
     .full-table button { margin-right: 4px; }
     .loading { display: flex; justify-content: center; padding: 24px; }
+    .block-reason { color: #c62828; font-size: 12px; margin-top: 4px; line-height: 1.4; }
   `],
 })
 export class MaintenanceComponent implements OnInit, OnDestroy {
@@ -139,6 +143,26 @@ export class MaintenanceComponent implements OnInit, OnDestroy {
     this.store.load(this.page, this.pageSize, undefined, this.form.value.type || undefined, this.form.value.status || undefined);
   }
 
+  // 页面级阻塞提示（刷新后与后端规则一致）：待处理维修工单在同一设备已有
+  // 处理中维修单，或存在其他待处理维修单时，开始维修会被整次拒绝。
+  repairBlockReason(m: MaintenanceRecord): string {
+    if (m.type !== 'repair' || m.status !== this.statuses.PENDING) {
+      return '';
+    }
+    const others = this.store.list().filter(
+      (x) => x.device_id === m.device_id && x.type === 'repair' && x.id !== m.id,
+    );
+    const running = others.find((x) => x.status === this.statuses.IN_PROGRESS);
+    if (running) {
+      return `不可开始：设备已有处理中的维修工单（${running.record_no}）`;
+    }
+    const pending = others.find((x) => x.status === this.statuses.PENDING);
+    if (pending) {
+      return `不可开始：设备已有待处理维修工单（${pending.record_no}），请先处理或取消重复工单`;
+    }
+    return '';
+  }
+
   search(): void { this.page = 1; this.load(); }
   onPage(e: { pageIndex: number; pageSize: number }): void { this.page = e.pageIndex + 1; this.pageSize = e.pageSize; this.load(); }
 
@@ -165,8 +189,12 @@ export class MaintenanceComponent implements OnInit, OnDestroy {
     ref.afterClosed().subscribe((payload) => {
       if (!payload) return;
       maintenanceStartApi(this.http, m.id, payload).subscribe({
-        next: () => { this.snackBar.open('工单已开始执行', '关闭', { duration: 2000 }); this.load(); },
-        error: (err) => this.snackBar.open(parseHttpError(err), '关闭', { duration: 3000 }),
+        next: (res: MaintenanceActionResult) => {
+          this.snackBar.open(res.notice || '工单已开始执行', '关闭', { duration: 3000 });
+          this.load();
+        },
+        // 阻塞原因来自后端（重复开始/并发提交/已有待处理或处理中工单）；刷新后状态一致。
+        error: (err) => { this.snackBar.open(parseHttpError(err), '关闭', { duration: 5000 }); this.load(); },
       });
     });
   }
@@ -176,8 +204,16 @@ export class MaintenanceComponent implements OnInit, OnDestroy {
     ref.afterClosed().subscribe((payload) => {
       if (!payload) return;
       maintenanceCompleteApi(this.http, m.id, payload).subscribe({
-        next: () => { this.snackBar.open('工单已完成', '关闭', { duration: 2000 }); this.load(); },
-        error: (err) => this.snackBar.open(parseHttpError(err), '关闭', { duration: 3000 }),
+        next: (res: MaintenanceActionResult) => {
+          if (res.notice) {
+            // 最新计量不合格时设备保持禁用，用警告样式提示未通过计量。
+            this.snackBar.open(res.notice, '关闭', { duration: 6000, panelClass: ['snack-warn'] });
+          } else {
+            this.snackBar.open('工单已完成', '关闭', { duration: 2000 });
+          }
+          this.load();
+        },
+        error: (err) => { this.snackBar.open(parseHttpError(err), '关闭', { duration: 5000 }); this.load(); },
       });
     });
   }

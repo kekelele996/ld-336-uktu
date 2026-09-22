@@ -21,4 +21,5 @@ const (
 	CodeWrongPassword    = 40103
 	CodeUserDisabled     = 40301
 	CodeDeviceNotAllowed = 40906
+	CodeRepairBlocked    = 40907
 )

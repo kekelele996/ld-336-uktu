@@ -18,3 +18,4 @@ mat-toolbar-row .spacer { flex: 1 1 auto; }
 .active-link { background: rgba(63,81,181,.12); }
 .sidenav { width: 240px; }
 .sidenav .nav-caption { margin-left: 8px; }
+.snack-warn { --mdc-snackbar-container-color: #fdecea; --mdc-snackbar-supporting-text-color: #c62828; background: #fdecea !important; color: #c62828 !important; }

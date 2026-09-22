@@ -6,6 +6,7 @@ import (
 
 	"github.com/medasset/medasset/internal/model"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // ScrapRepository 报废申请仓储。
@@ -23,6 +24,21 @@ func (r *ScrapRepository) DB() *gorm.DB { return r.db }
 // Create 创建报废申请。
 func (r *ScrapRepository) Create(s *model.ScrapRequest) error {
 	return r.db.Create(s).Error
+}
+
+// CreateTx 在指定事务中创建报废申请。
+func (r *ScrapRepository) CreateTx(tx *gorm.DB, s *model.ScrapRequest) error {
+	return tx.Create(s).Error
+}
+
+// FindByIDForUpdate 加锁查询报废申请（审批并发安全）。
+func (r *ScrapRepository) FindByIDForUpdate(tx *gorm.DB, id uint) (*model.ScrapRequest, error) {
+	var s model.ScrapRequest
+	err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&s, id).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, ErrNotFound
+	}
+	return &s, err
 }
 
 // FindByID 按 ID 查询。

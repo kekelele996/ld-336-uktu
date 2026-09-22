@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/medasset/medasset/internal/constants"
 	"github.com/medasset/medasset/internal/model"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -52,6 +53,36 @@ func (r *MaintenanceRepository) FindByIDForUpdate(tx *gorm.DB, id uint) (*model.
 		return nil, ErrNotFound
 	}
 	return &m, err
+}
+
+// FindByIDTx 在指定事务中普通查询（不加锁，用于加锁前定位设备）。
+func (r *MaintenanceRepository) FindByIDTx(tx *gorm.DB, id uint) (*model.MaintenanceRecord, error) {
+	var m model.MaintenanceRecord
+	err := tx.First(&m, id).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, ErrNotFound
+	}
+	return &m, err
+}
+
+// FindRepairBlockerForUpdate 查询阻塞当前维修工单开始的其他维修工单（加锁）。
+// 规则：同一设备存在除自身外任意“待处理”或“处理中”的维修工单时，当前工单的开始整次拒绝。
+// 重复报修产生的多张待处理工单可通过取消多余工单后再开始。
+// 无阻塞时返回 nil；并发开始由设备行锁串行化，重复/并发提交只能生效一次。
+func (r *MaintenanceRepository) FindRepairBlockerForUpdate(tx *gorm.DB, deviceID, selfID uint) (*model.MaintenanceRecord, error) {
+	var m model.MaintenanceRecord
+	err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("device_id = ? AND type = ? AND id <> ? AND status IN ?",
+			deviceID, constants.MaintenanceTypeRepair, selfID,
+			[]string{constants.MaintenanceStatusPending, constants.MaintenanceStatusInProgress}).
+		Order("id ASC").First(&m).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &m, nil
 }
 
 // List 分页查询保养/维修记录。
